@@ -33,25 +33,28 @@ class RegistryCoordinatorActor extends Actor {
           self ! RegistryActorNotCreated(id, key, originalSender, ex)
           ex
         })
-        val futureEntry: Entry = Entry(id, key, actor = None, Some(creationFuture))
+        val futureEntry: Entry = Entry(id, key, state = Right(creationFuture))
         registry += futureEntry
         futureEntry
       }
 
       (entry match {
-        case Entry(_, _, Some(actor), _) ⇒ Future.successful(actor)
-        case Entry(_, _, None, Some(future)) ⇒ future
+        case Entry(_, _, Left(actor)) ⇒ Future.successful(actor)
+        case Entry(_, _, Right(future)) ⇒ future
         case e ⇒ sys.error(s"Impossible state: $e")
       }) pipeTo sender()
 
     case RegistryActorCreated(service, key, sender, actor) ⇒
-      for (entry ← registry.byServiceAndKey((service, key))) registry -= entry
-      registry += Entry(service, key, actor = Some(actor), None)
+      removeEntry(service, key)
+      registry += Entry(service, key, state = Left(actor))
     // sender ! actor
     case RegistryActorNotCreated(service, key, sender, ex) ⇒
-      for (entry ← registry.byServiceAndKey((service, key))) registry -= entry
+      removeEntry(service, key)
     // sender ! Status.Failure(ex)
   }
+
+  def removeEntry(service: String, key: Key): Unit =
+    for (entry ← registry.byServiceAndKey((service, key))) registry -= entry
 }
 
 object RegistryCoordinatorActor {
@@ -59,18 +62,20 @@ object RegistryCoordinatorActor {
   case class Entry(
     service: String,
     key: Key,
-    actor: Option[ActorRef] = None,
-    actorFuture: Option[Future[ActorRef]] = None
+    state: Either[ActorRef, Future[ActorRef]]
   )
-
 
   class Registry extends IndexedSet[Entry] {
     val byService = multiple(_.service)
     val byServiceAndKey = unique(e ⇒ (e.service, e.key))
-    val byActor = projection(new Projection(_.actor, new UniqueSomeIndex[ActorRef]))
+    val byActor = projection(new Projection(_.state, new UniqueLeftIndex[ActorRef]))
 
-    protected class UniqueSomeIndex[K] extends UniqueIndex[Option[K]](replace = false) {
+    /*protected class UniqueSomeIndex[K] extends UniqueIndex[Option[K]](replace = false) {
       override def filter(key: Option[K]): Boolean = key.nonEmpty
+    }*/
+
+    protected class UniqueLeftIndex[K] extends UniqueIndex[Either[K, _]](replace = false) {
+      override def filter(key: Either[K, _]): Boolean = key.isLeft
     }
 
   }
