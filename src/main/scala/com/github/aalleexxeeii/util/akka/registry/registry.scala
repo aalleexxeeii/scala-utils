@@ -38,10 +38,9 @@ class RegistryCoordinatorActor extends Actor {
         futureEntry
       }
 
-      (entry match {
-        case Entry(_, _, Left(actor)) ⇒ Future.successful(actor)
-        case Entry(_, _, Right(future)) ⇒ future
-        case e ⇒ sys.error(s"Impossible state: $e")
+      (entry.state.match {
+        case Left(actor) ⇒ Future.successful(actor)
+        case Right(future) ⇒ future
       }) pipeTo sender()
 
     case RegistryActorCreated(service, key, sender, actor) ⇒
