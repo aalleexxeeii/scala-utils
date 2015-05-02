@@ -68,6 +68,8 @@ class IndexedSet[E](val u: mutable.Set[E] = mutable.Set[E]())
     def remove(key: K, value: E): Unit
 
     def keys: collection.Set[K]
+
+    def filter(key: K): Boolean = true
   }
 
   protected class UniqueIndex[K](val replace: Boolean = true) extends Index[K, Option] {
@@ -78,10 +80,10 @@ class IndexedSet[E](val u: mutable.Set[E] = mutable.Set[E]())
     }
 
     override def put(key: K, value: E): Unit =
-      if (index.contains(key) && !replace) sys.error(s"Duplicate index $key")
-      else index(key) = value
+      if (!replace && index.contains(key)) sys.error(s"Duplicate index $key")
+      else if (filter(key)) index(key) = value
 
-    override def remove(key: K, value: E): Unit = index.remove(key)
+    override def remove(key: K, value: E): Unit = if (filter(key)) index.remove(key)
 
     override def keys = index.keySet
   }
@@ -91,9 +93,9 @@ class IndexedSet[E](val u: mutable.Set[E] = mutable.Set[E]())
 
     override def get(key: K): mutable.Set[E] = index.getOrElse(key, mutable.Set.empty)
 
-    override def put(key: K, value: E): Unit = index.addBinding(key, value)
+    override def put(key: K, value: E): Unit = if (filter(key)) index.addBinding(key, value)
 
-    override def remove(key: K, value: E): Unit = index.removeBinding(key, value)
+    override def remove(key: K, value: E): Unit = if (filter(key)) index.removeBinding(key, value)
 
     override def keys: collection.Set[K] = index.keySet
   }
