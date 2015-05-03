@@ -1,6 +1,6 @@
 package com.github.aalleexxeeii.util.akka.registry
 
-import akka.actor.{Actor, ActorRef}
+import akka.actor.{Actor, ActorLogging, ActorRef, Terminated}
 import akka.pattern.{ask, pipe}
 import akka.util.Timeout
 import com.github.aalleexxeeii.util.Extensions._
@@ -11,8 +11,9 @@ import com.github.aalleexxeeii.util.index.IndexedSet
 import scala.collection.mutable
 import scala.concurrent.Future
 import scala.concurrent.duration._
+import scala.util.{Failure, Success}
 
-class RegistryCoordinatorActor extends Actor {
+class RegistryCoordinatorActor extends Actor with ActorLogging {
 
   import context.dispatcher
 
@@ -25,31 +26,39 @@ class RegistryCoordinatorActor extends Actor {
     case Create(id, key) ⇒
       val entry = registry.byServiceAndKey((id, key)) getOrElse {
         val serviceActor = services(id)
-        val originalSender = sender()
-        val creationFuture: Future[ActorRef] = (serviceActor ? Create(id, key)).mapTo[ActorRef].transform({ actor ⇒
-          self ! RegistryActorCreated(id, key, originalSender, actor)
-          actor
-        }, { ex ⇒
-          self ! RegistryActorNotCreated(id, key, originalSender, ex)
-          ex
-        })
-        val futureEntry: Entry = Entry(id, key, state = Right(creationFuture))
+        val creationFuture = (serviceActor ? Create(id, key)).mapTo[ActorRef]
+        creationFuture onComplete {
+          case Success(actor) ⇒
+            self ! RegistryActorCreated(id, key, actor)
+            context watch actor
+          case Failure(ex) ⇒
+            self ! RegistryActorNotCreated(id, key, ex)
+        }
+        val futureEntry = Entry(id, key, state = Right(creationFuture))
         registry += futureEntry
         futureEntry
       }
 
-      (entry.state.match {
+      (entry.state match {
         case Left(actor) ⇒ Future.successful(actor)
         case Right(future) ⇒ future
       }) pipeTo sender()
 
-    case RegistryActorCreated(service, key, sender, actor) ⇒
+    case RegistryActorCreated(service, key, actor) ⇒
       removeEntry(service, key)
       registry += Entry(service, key, state = Left(actor))
-    // sender ! actor
-    case RegistryActorNotCreated(service, key, sender, ex) ⇒
+
+    case RegistryActorNotCreated(service, key, ex) ⇒
       removeEntry(service, key)
-    // sender ! Status.Failure(ex)
+
+    case Terminated(actor) ⇒
+      registry.byActor(actor) match {
+        case Some(entry) ⇒
+          registry -= entry
+          log.debug(s"Registry actor for $entry terminated")
+        case None ⇒
+          log.warning(s"Unknown actor terminated: $actor")
+      }
   }
 
   def removeEntry(service: String, key: Key): Unit =
@@ -67,11 +76,13 @@ object RegistryCoordinatorActor {
   class Registry extends IndexedSet[Entry] {
     val byService = multiple(_.service)
     val byServiceAndKey = unique(e ⇒ (e.service, e.key))
-    val byActor = projection(new Projection(_.state, new UniqueLeftIndex[ActorRef]))
+    val byActorOption = projection(new Projection(_.state.left.toOption, new UniqueSomeIndex[ActorRef]))
 
-    /*protected class UniqueSomeIndex[K] extends UniqueIndex[Option[K]](replace = false) {
+    def byActor(actor: ActorRef): Option[Entry] = byActorOption(Some(actor))
+
+    protected class UniqueSomeIndex[K] extends UniqueIndex[Option[K]](replace = false) {
       override def filter(key: Option[K]): Boolean = key.nonEmpty
-    }*/
+    }
 
     protected class UniqueLeftIndex[K] extends UniqueIndex[Either[K, _]](replace = false) {
       override def filter(key: Either[K, _]): Boolean = key.isLeft
@@ -81,9 +92,9 @@ object RegistryCoordinatorActor {
 
   case class Create(id: String, key: Key)
 
-  protected case class RegistryActorCreated(service: String, key: Key, sender: ActorRef, actor: ActorRef)
+  protected case class RegistryActorCreated(service: String, key: Key, actor: ActorRef)
 
-  protected case class RegistryActorNotCreated(service: String, key: Key, sender: ActorRef, ex: Throwable)
+  protected case class RegistryActorNotCreated(service: String, key: Key, ex: Throwable)
 
 }
 
