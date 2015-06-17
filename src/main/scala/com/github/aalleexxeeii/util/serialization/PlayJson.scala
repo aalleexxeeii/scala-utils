@@ -9,19 +9,19 @@ object PlayJson {
 
   def formatCaseObjectEnums[T: WeakTypeTag](enums: T*): Format[T] = new Format[T] {
     val tag = implicitly[WeakTypeTag[T]]
+    val typeName = tag.tpe
     val forward = enums.map(e ⇒
       // mirror.reflectClass(mirror.classSymbol(e.getClass)).symbol.name.decodedName.toString → e
       e.toString → e
     ).toMap
-    val backward = forward.map(e ⇒ e._2 → e._1)
-
+    val backward = forward map (_.swap)
 
     override def writes(o: T): JsValue = {
-      backward.get(o).map(s ⇒ JsString(s)).getOrElse(sys.error(s"$o is not enumerated for $tag"))
+      backward.get(o).map(s ⇒ JsString(s)).getOrElse(sys.error(s"$o is not enumerated for $typeName"))
     }
 
     override def reads(json: JsValue): JsResult[T] = json match {
-      case JsString(s) ⇒ forward.get(s).map(JsSuccess(_)).getOrElse(JsError(s"unknown value '$s' for enumeration $tag"))
+      case JsString(s) ⇒ forward.get(s) map (JsSuccess(_)) getOrElse JsError(s"unknown value '$s' for enumeration $typeName")
       case wrong ⇒ JsError(s"type $tag should have string representation while it is $wrong")
     }
   }
@@ -46,5 +46,7 @@ object Test extends App {
   val result1 = Json.fromJson[Sample.Base](JsString("Two"))
 
   val result2 = Json.toJson(Four)
+
+  val result3 = Json.fromJson[Sample.Base](JsString("Ten"))
 
 }
